@@ -1,1 +1,35 @@
--- Migration file to update user roles and event moderation columns\n\n-- Update users.role to allow 'organizer'\nPRAGMA foreign_keys=OFF;\nBEGIN TRANSACTION;\nCREATE TABLE IF NOT EXISTS users_new (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    username TEXT NOT NULL,\n    role TEXT CHECK(role IN ('user', 'admin', 'organizer')) NOT NULL DEFAULT 'user'\n);\nINSERT INTO users_new (id, username, role) SELECT id, username, role FROM users;\nDROP TABLE users;\nALTER TABLE users_new RENAME TO users;\nCOMMIT;\n\n-- Add moderation_status to events\nPRAGMA foreign_keys=OFF;\nBEGIN TRANSACTION;\nALTER TABLE events ADD COLUMN moderation_status TEXT CHECK(moderation_status IN ('pending','approved','rejected')) DEFAULT 'approved';\nCOMMIT;\n\n-- Add approved_at and approved_by_id columns\nPRAGMA foreign_keys=OFF;\nBEGIN TRANSACTION;\nALTER TABLE events ADD COLUMN approved_at TEXT;\nALTER TABLE events ADD COLUMN approved_by_id INTEGER;\nCOMMIT;\n\n-- Create index on moderation_status\nCREATE INDEX IF NOT EXISTS idx_moderation_status ON events(moderation_status);
+PRAGMA foreign_keys = ON;
+
+-- Expand users.role to allow 'organizer'
+-- SQLite/D1 requires rebuilding the table to change CHECK constraints.
+BEGIN TRANSACTION;
+
+CREATE TABLE users_new (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  email TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'organizer', 'admin')),
+  password_hash TEXT NOT NULL,
+  password_salt TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO users_new (id, email, name, role, password_hash, password_salt, created_at, updated_at)
+SELECT id, email, name, role, password_hash, password_salt, created_at, updated_at
+FROM users;
+
+DROP TABLE users;
+ALTER TABLE users_new RENAME TO users;
+
+COMMIT;
+
+-- Add moderation fields to events (approval -> auto publish)
+-- Existing rows become approved by default.
+ALTER TABLE events ADD COLUMN moderation_status TEXT NOT NULL DEFAULT 'approved'
+  CHECK (moderation_status IN ('pending', 'approved', 'rejected'));
+
+ALTER TABLE events ADD COLUMN approved_at TEXT;
+ALTER TABLE events ADD COLUMN approved_by_id INTEGER;
+
+CREATE INDEX IF NOT EXISTS idx_events_moderation_status ON events(moderation_status);
