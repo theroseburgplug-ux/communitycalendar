@@ -10,7 +10,7 @@ type SessionUser = {
   id: number;
   email: string;
   name: string;
-  role: 'user' | 'admin';
+  role: 'user' | 'organizer' | 'admin';
 };
 
 type EventRecord = {
@@ -25,6 +25,11 @@ type EventRecord = {
   organizer: string | null;
   status: 'draft' | 'published';
   visibility: 'public' | 'private';
+
+  moderationStatus: 'pending' | 'approved' | 'rejected';
+  approvedAt: string | null;
+  approvedById: number | null;
+
   eventTypeId: number;
   eventTypeName: string;
   eventTypeSlug: string;
@@ -100,13 +105,16 @@ export default {
     }
 
     if (url.pathname === '/api/event-types' && request.method === 'GET') {
-      const result = await env.DB.prepare('SELECT id, name, slug, color, is_active as isActive FROM event_types WHERE is_active = 1 ORDER BY name ASC').all();
+      const result = await env.DB.prepare(
+        'SELECT id, name, slug, color, is_active as isActive FROM event_types WHERE is_active = 1 ORDER BY name ASC',
+      ).all();
       return json({ items: result.results || [] });
     }
 
+    // Public listing: only approved + published + public events.
     if (url.pathname === '/api/events' && request.method === 'GET') {
       const typeSlug = url.searchParams.get('type');
-      const items = await selectEvents(env, typeSlug ?? undefined);
+      const items = await selectPublicEvents(env, typeSlug ?? undefined);
       return json({ items });
     }
 
@@ -141,8 +149,9 @@ export default {
       const insert = await env.DB.prepare(
         `INSERT INTO events (
           title, slug, description, start_at, end_at, all_day, location, organizer,
-          status, visibility, event_type_id, created_by_id, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          status, visibility, event_type_id, created_by_id, created_at, updated_at,
+          moderation_status, approved_at, approved_by_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
         .bind(
           payload.title,
@@ -159,6 +168,10 @@ export default {
           user.id,
           now,
           now,
+          // Admin-created events are immediately approved.
+          'approved',
+          now,
+          user.id,
         )
         .run();
 
@@ -328,7 +341,7 @@ async function parseEventPayload(request: Request) {
   };
 }
 
-async function selectEvents(env: Env, typeSlug?: string): Promise<EventRecord[]> {
+async function selectPublicEvents(env: Env, typeSlug?: string): Promise<EventRecord[]> {
   const base = `
     SELECT
       e.id,
@@ -342,6 +355,9 @@ async function selectEvents(env: Env, typeSlug?: string): Promise<EventRecord[]>
       e.organizer,
       e.status,
       e.visibility,
+      e.moderation_status as moderationStatus,
+      e.approved_at as approvedAt,
+      e.approved_by_id as approvedById,
       e.event_type_id as eventTypeId,
       et.name as eventTypeName,
       et.slug as eventTypeSlug,
@@ -352,7 +368,16 @@ async function selectEvents(env: Env, typeSlug?: string): Promise<EventRecord[]>
     JOIN event_types et ON et.id = e.event_type_id
   `;
 
-  const query = typeSlug ? `${base} WHERE et.slug = ? ORDER BY e.start_at ASC` : `${base} ORDER BY e.start_at ASC`;
+  const where = `
+    WHERE e.status = 'published'
+      AND e.visibility = 'public'
+      AND e.moderation_status = 'approved'
+  `;
+
+  const query = typeSlug
+    ? `${base} ${where} AND et.slug = ? ORDER BY e.start_at ASC`
+    : `${base} ${where} ORDER BY e.start_at ASC`;
+
   const stmt = env.DB.prepare(query);
   const result = typeSlug ? await stmt.bind(typeSlug).all<EventRecord>() : await stmt.all<EventRecord>();
   return (result.results || []) as EventRecord[];
@@ -372,6 +397,9 @@ async function selectEventById(env: Env, id: number): Promise<EventRecord | null
       e.organizer,
       e.status,
       e.visibility,
+      e.moderation_status as moderationStatus,
+      e.approved_at as approvedAt,
+      e.approved_by_id as approvedById,
       e.event_type_id as eventTypeId,
       et.name as eventTypeName,
       et.slug as eventTypeSlug,
