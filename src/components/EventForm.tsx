@@ -6,6 +6,7 @@ interface EventFormProps {
   initialValue?: EventItem | null;
   onCancel?: () => void;
   onSubmit: (payload: EventPayload) => Promise<void>;
+  showStatusControls?: boolean;
 }
 
 function toInputValue(value: string | null) {
@@ -13,7 +14,7 @@ function toInputValue(value: string | null) {
   return new Date(value).toISOString().slice(0, 16);
 }
 
-export function EventForm({ types, initialValue, onCancel, onSubmit }: EventFormProps) {
+export function EventForm({ types, initialValue, onCancel, onSubmit, showStatusControls = true }: EventFormProps) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [startAt, setStartAt] = useState('');
@@ -122,20 +123,24 @@ export function EventForm({ types, initialValue, onCancel, onSubmit }: EventForm
             ))}
           </select>
         </label>
-        <label>
-          Status
-          <select value={status} onChange={(e) => setStatus(e.target.value as 'draft' | 'published')}>
-            <option value="draft">Draft</option>
-            <option value="published">Published</option>
-          </select>
-        </label>
-        <label>
-          Visibility
-          <select value={visibility} onChange={(e) => setVisibility(e.target.value as 'public' | 'private')}>
-            <option value="public">Public</option>
-            <option value="private">Private</option>
-          </select>
-        </label>
+        {showStatusControls ? (
+          <label>
+            Status
+            <select value={status} onChange={(e) => setStatus(e.target.value as 'draft' | 'published')}>
+              <option value="draft">Draft</option>
+              <option value="published">Published</option>
+            </select>
+          </label>
+        ) : null}
+        {showStatusControls ? (
+          <label>
+            Visibility
+            <select value={visibility} onChange={(e) => setVisibility(e.target.value as 'public' | 'private')}>
+              <option value="public">Public</option>
+              <option value="private">Private</option>
+            </select>
+          </label>
+        ) : null}
       </div>
       {error ? <div className="notice error">{error}</div> : null}
       <button className="btn btn-solid" disabled={loading} type="submit">

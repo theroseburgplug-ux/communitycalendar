@@ -5,6 +5,8 @@ interface EventListProps {
   emptyText?: string;
   onEdit?: (item: EventItem) => void;
   onDelete?: (item: EventItem) => void;
+  onApprove?: (item: EventItem) => Promise<void>;
+  onReject?: (item: EventItem) => Promise<void>;
 }
 
 function formatDateRange(startAt: string, endAt: string | null) {
@@ -26,7 +28,7 @@ function formatDateRange(startAt: string, endAt: string | null) {
   return `${startText} → ${endText}`;
 }
 
-export function EventList({ items, emptyText = 'No events found.', onEdit, onDelete }: EventListProps) {
+export function EventList({ items, emptyText = 'No events found.', onEdit, onDelete, onApprove, onReject }: EventListProps) {
   if (!items.length) {
     return <div className="card muted">{emptyText}</div>;
   }
@@ -42,8 +44,18 @@ export function EventList({ items, emptyText = 'No events found.', onEdit, onDel
               </div>
               <h3>{item.title}</h3>
             </div>
-            {(onEdit || onDelete) && (
+            {(onEdit || onDelete || onApprove || onReject) && (
               <div className="row gap-sm">
+                {onApprove ? (
+                  <button className="btn success" onClick={() => void onApprove(item)}>
+                    Approve
+                  </button>
+                ) : null}
+                {onReject ? (
+                  <button className="btn danger" onClick={() => void onReject(item)}>
+                    Reject
+                  </button>
+                ) : null}
                 {onEdit ? (
                   <button className="btn" onClick={() => onEdit(item)}>
                     Edit

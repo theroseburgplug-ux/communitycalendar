@@ -10,7 +10,7 @@ type SessionUser = {
   id: number;
   email: string;
   name: string;
-  role: 'user' | 'admin';
+  role: 'user' | 'organizer' | 'admin';
 };
 
 type EventRecord = {
@@ -23,7 +23,7 @@ type EventRecord = {
   allDay: number;
   location: string | null;
   organizer: string | null;
-  status: 'draft' | 'published';
+  status: 'draft' | 'pending' | 'published' | 'rejected';
   visibility: 'public' | 'private';
   eventTypeId: number;
   eventTypeName: string;
@@ -89,6 +89,44 @@ export default {
       );
     }
 
+    if (url.pathname === '/api/auth/register' && request.method === 'POST') {
+      const body = await request.json<{ name?: string; email?: string; password?: string }>().catch(() => ({}));
+      const name = (body.name || '').trim();
+      const email = (body.email || '').trim().toLowerCase();
+      const password = body.password || '';
+
+      if (!name || !email || !password) return json({ error: 'Name, email and password are required.' }, 400);
+      if (password.length < 8) return json({ error: 'Password must be at least 8 characters.' }, 400);
+
+      const existing = await env.DB.prepare('SELECT id FROM users WHERE email = ? LIMIT 1').bind(email).first();
+      if (existing) return json({ error: 'An account with that email already exists.' }, 409);
+
+      const salt = crypto.randomUUID();
+      const hash = await sha256(`${salt}${password}`);
+      const now = new Date().toISOString();
+
+      const insert = await env.DB.prepare(
+        'INSERT INTO users (email, name, role, password_hash, password_salt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      )
+        .bind(email, name, 'organizer', hash, salt, now, now)
+        .run();
+
+      const userId = Number(insert.meta.last_row_id);
+      const token = crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', '');
+      const ttlDays = Number(env.SESSION_TTL_DAYS || '14');
+      const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000).toISOString();
+
+      await env.DB.prepare('INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)')
+        .bind(token, userId, expiresAt, now)
+        .run();
+
+      return json(
+        { user: { id: userId, email, name, role: 'organizer' } },
+        201,
+        { 'Set-Cookie': createCookie(env.COOKIE_NAME, token, ttlDays) },
+      );
+    }
+
     if (url.pathname === '/api/auth/logout' && request.method === 'POST') {
       const token = getCookie(request, env.COOKIE_NAME);
       if (token) {
@@ -128,6 +166,58 @@ export default {
         </html>`,
         { headers: { 'content-type': 'text/html; charset=utf-8' } },
       );
+    }
+
+    if (url.pathname === '/api/organizer/events' && request.method === 'GET') {
+      const user = await requireOrganizer(request, env);
+      if (user instanceof Response) return user;
+      const items = await selectEventsByUser(env, user.id);
+      return json({ items });
+    }
+
+    if (url.pathname === '/api/organizer/events' && request.method === 'POST') {
+      const user = await requireOrganizer(request, env);
+      if (user instanceof Response) return user;
+      const payload = await parseEventPayload(request);
+      if (payload instanceof Response) return payload;
+
+      const baseSlug = payload.slug || slugify(payload.title);
+      const slug = await makeUniqueSlug(env, baseSlug);
+      const now = new Date().toISOString();
+
+      const insert = await env.DB.prepare(
+        `INSERT INTO events (
+          title, slug, description, start_at, end_at, all_day, location, organizer,
+          status, visibility, event_type_id, created_by_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'public', ?, ?, ?, ?)`,
+      )
+        .bind(
+          payload.title,
+          slug,
+          payload.description,
+          payload.startAt,
+          payload.endAt || null,
+          payload.allDay ? 1 : 0,
+          payload.location || null,
+          payload.organizer || null,
+          payload.eventTypeId,
+          user.id,
+          now,
+          now,
+        )
+        .run();
+
+      const id = Number(insert.meta.last_row_id);
+      const item = await selectEventById(env, id);
+      return json({ item }, 201);
+    }
+
+    if (url.pathname === '/api/admin/events' && request.method === 'GET') {
+      const user = await requireAdmin(request, env);
+      if (user instanceof Response) return user;
+      const statusFilter = url.searchParams.get('status') || undefined;
+      const items = await selectEvents(env, undefined, statusFilter);
+      return json({ items });
     }
 
     if (url.pathname === '/api/admin/events' && request.method === 'POST') {
@@ -213,6 +303,30 @@ export default {
       return json({ ok: true });
     }
 
+    const eventActionMatch = url.pathname.match(/^\/api\/admin\/events\/(\d+)\/(approve|reject)$/);
+    if (eventActionMatch && request.method === 'POST') {
+      const user = await requireAdmin(request, env);
+      if (user instanceof Response) return user;
+      const id = Number(eventActionMatch[1]);
+      const action = eventActionMatch[2];
+
+      const existing = await env.DB.prepare('SELECT id FROM events WHERE id = ?').bind(id).first();
+      if (!existing) return json({ error: 'Event not found.' }, 404);
+
+      if (action === 'approve') {
+        await env.DB.prepare('UPDATE events SET status = ?, updated_at = ? WHERE id = ?')
+          .bind('published', new Date().toISOString(), id)
+          .run();
+        const item = await selectEventById(env, id);
+        return json({ item });
+      } else {
+        await env.DB.prepare('UPDATE events SET status = ?, updated_at = ? WHERE id = ?')
+          .bind('rejected', new Date().toISOString(), id)
+          .run();
+        return json({ ok: true });
+      }
+    }
+
     return env.ASSETS.fetch(request);
   },
 };
@@ -276,6 +390,13 @@ async function requireAdmin(request: Request, env: Env): Promise<SessionUser | R
   return user;
 }
 
+async function requireOrganizer(request: Request, env: Env): Promise<SessionUser | Response> {
+  const user = await getSessionUser(request, env);
+  if (!user) return json({ error: 'Authentication required.' }, 401);
+  if (user.role !== 'organizer' && user.role !== 'admin') return json({ error: 'Organizer access required.' }, 403);
+  return user;
+}
+
 async function sha256(value: string) {
   const bytes = new TextEncoder().encode(value);
   const digest = await crypto.subtle.digest('SHA-256', bytes);
@@ -328,7 +449,7 @@ async function parseEventPayload(request: Request) {
   };
 }
 
-async function selectEvents(env: Env, typeSlug?: string): Promise<EventRecord[]> {
+async function selectEvents(env: Env, typeSlug?: string, statusFilter?: string): Promise<EventRecord[]> {
   const base = `
     SELECT
       e.id,
@@ -352,10 +473,66 @@ async function selectEvents(env: Env, typeSlug?: string): Promise<EventRecord[]>
     JOIN event_types et ON et.id = e.event_type_id
   `;
 
-  const query = typeSlug ? `${base} WHERE et.slug = ? ORDER BY e.start_at ASC` : `${base} ORDER BY e.start_at ASC`;
+  const conditions: string[] = [];
+  const bindings: string[] = [];
+
+  if (typeSlug) {
+    conditions.push('et.slug = ?');
+    bindings.push(typeSlug);
+  }
+  if (statusFilter) {
+    conditions.push('e.status = ?');
+    bindings.push(statusFilter);
+  }
+
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const query = `${base} ${where} ORDER BY e.start_at ASC`;
   const stmt = env.DB.prepare(query);
-  const result = typeSlug ? await stmt.bind(typeSlug).all<EventRecord>() : await stmt.all<EventRecord>();
+  const result = bindings.length ? await stmt.bind(...bindings).all<EventRecord>() : await stmt.all<EventRecord>();
   return (result.results || []) as EventRecord[];
+}
+
+async function selectEventsByUser(env: Env, userId: number): Promise<EventRecord[]> {
+  const result = await env.DB.prepare(
+    `SELECT
+      e.id,
+      e.title,
+      e.slug,
+      e.description,
+      e.start_at as startAt,
+      e.end_at as endAt,
+      e.all_day as allDay,
+      e.location,
+      e.organizer,
+      e.status,
+      e.visibility,
+      e.event_type_id as eventTypeId,
+      et.name as eventTypeName,
+      et.slug as eventTypeSlug,
+      et.color as eventTypeColor,
+      e.created_at as createdAt,
+      e.updated_at as updatedAt
+    FROM events e
+    JOIN event_types et ON et.id = e.event_type_id
+    WHERE e.created_by_id = ?
+    ORDER BY e.created_at DESC`,
+  )
+    .bind(userId)
+    .all<EventRecord>();
+  return (result.results || []) as EventRecord[];
+}
+
+async function makeUniqueSlug(env: Env, base: string): Promise<string> {
+  const maxAttempts = 100;
+  let slug = base;
+  let attempt = 0;
+  while (attempt <= maxAttempts) {
+    const existing = await env.DB.prepare('SELECT id FROM events WHERE slug = ? LIMIT 1').bind(slug).first();
+    if (!existing) return slug;
+    attempt++;
+    slug = `${base}-${attempt}`;
+  }
+  throw new Error('Unable to generate a unique slug after maximum attempts.');
 }
 
 async function selectEventById(env: Env, id: number): Promise<EventRecord | null> {

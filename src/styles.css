@@ -101,6 +101,10 @@ label { display: block; color: var(--muted); }
   color: #ffd0d0;
   border-color: #6b2e2e;
 }
+.btn.success {
+  color: #d0ffe8;
+  border-color: #2e6b4a;
+}
 .eyebrow {
   text-transform: uppercase;
   letter-spacing: 0.12em;
