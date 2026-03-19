@@ -1,6 +1,7 @@
-export type UserRole = 'user' | 'admin';
+export type UserRole = 'user' | 'organizer' | 'admin';
 export type EventStatus = 'draft' | 'published';
 export type Visibility = 'public' | 'private';
+export type ModerationStatus = 'pending' | 'approved' | 'rejected';
 
 export interface EventType {
   id: number;
@@ -22,6 +23,11 @@ export interface EventItem {
   organizer: string | null;
   status: EventStatus;
   visibility: Visibility;
+
+  moderationStatus: ModerationStatus;
+  approvedAt: string | null;
+  approvedById: number | null;
+
   eventTypeId: number;
   eventTypeName: string;
   eventTypeSlug: string;
