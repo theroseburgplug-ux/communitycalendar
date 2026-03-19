@@ -25,6 +25,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
+  register: (email: string, name: string, password: string) =>
+    request<{ user: SessionUser }>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ email, name, password }),
+    }),
   logout: () =>
     request<{ ok: true }>('/api/auth/logout', {
       method: 'POST',
@@ -32,6 +37,7 @@ export const api = {
   getEventTypes: () => request<{ items: EventType[] }>('/api/event-types'),
   getEvents: (params?: URLSearchParams) =>
     request<{ items: EventItem[] }>(`/api/events${params ? `?${params.toString()}` : ''}`),
+  getAdminEvents: () => request<{ items: EventItem[] }>('/api/admin/events'),
   createEvent: (payload: EventPayload) =>
     request<{ item: EventItem }>('/api/admin/events', {
       method: 'POST',
@@ -46,4 +52,14 @@ export const api = {
     request<{ ok: true }>(`/api/admin/events/${id}`, {
       method: 'DELETE',
     }),
+  organizerSubmitEvent: (payload: EventPayload) =>
+    request<{ item: EventItem }>('/api/organizer/events', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  listPendingModeration: () => request<{ items: EventItem[] }>('/api/admin/moderation/pending'),
+  approveModeration: (id: number) =>
+    request<{ item: EventItem }>(`/api/admin/moderation/${id}/approve`, { method: 'POST' }),
+  rejectModeration: (id: number) =>
+    request<{ item: EventItem }>(`/api/admin/moderation/${id}/reject`, { method: 'POST' }),
 };
