@@ -1,5 +1,5 @@
-export type UserRole = 'user' | 'admin';
-export type EventStatus = 'draft' | 'published';
+export type UserRole = 'user' | 'organizer' | 'admin';
+export type EventStatus = 'draft' | 'pending' | 'published' | 'rejected';
 export type Visibility = 'public' | 'private';
 
 export interface EventType {

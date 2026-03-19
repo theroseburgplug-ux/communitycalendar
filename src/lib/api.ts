@@ -25,6 +25,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
+  register: (name: string, email: string, password: string) =>
+    request<{ user: SessionUser }>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ name, email, password }),
+    }),
   logout: () =>
     request<{ ok: true }>('/api/auth/logout', {
       method: 'POST',
@@ -32,6 +37,17 @@ export const api = {
   getEventTypes: () => request<{ items: EventType[] }>('/api/event-types'),
   getEvents: (params?: URLSearchParams) =>
     request<{ items: EventItem[] }>(`/api/events${params ? `?${params.toString()}` : ''}`),
+  getOrganizerEvents: () => request<{ items: EventItem[] }>('/api/organizer/events'),
+  submitEvent: (payload: EventPayload) =>
+    request<{ item: EventItem }>('/api/organizer/events', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  getPendingEvents: () => request<{ items: EventItem[] }>('/api/admin/events?status=pending'),
+  approveEvent: (id: number) =>
+    request<{ item: EventItem }>(`/api/admin/events/${id}/approve`, { method: 'POST' }),
+  rejectEvent: (id: number) =>
+    request<{ ok: true }>(`/api/admin/events/${id}/reject`, { method: 'POST' }),
   createEvent: (payload: EventPayload) =>
     request<{ item: EventItem }>('/api/admin/events', {
       method: 'POST',
