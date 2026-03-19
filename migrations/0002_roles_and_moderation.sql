@@ -1,7 +1,10 @@
-PRAGMA foreign_keys = ON;
+-- 0002_roles_and_moderation.sql
+-- Expand users.role to allow 'organizer' and add moderation fields to events.
 
--- Expand users.role to allow 'organizer'
--- SQLite/D1 requires rebuilding the table to change CHECK constraints.
+-- We must disable foreign key enforcement while rebuilding users,
+-- because sessions.user_id and events.created_by_id reference users(id).
+PRAGMA foreign_keys = OFF;
+
 BEGIN TRANSACTION;
 
 CREATE TABLE users_new (
@@ -24,8 +27,10 @@ ALTER TABLE users_new RENAME TO users;
 
 COMMIT;
 
--- Add moderation fields to events (approval -> auto publish)
--- Existing rows become approved by default.
+-- Re-enable FK enforcement for the remainder of the migration.
+PRAGMA foreign_keys = ON;
+
+-- Add moderation fields to events (existing rows become approved by default).
 ALTER TABLE events ADD COLUMN moderation_status TEXT NOT NULL DEFAULT 'approved'
   CHECK (moderation_status IN ('pending', 'approved', 'rejected'));
 
