@@ -1,9 +1,9 @@
-import type { SessionUser } from '../lib/types';
+import type { AppView, SessionUser } from '../lib/types';
 
 interface HeaderProps {
   user: SessionUser | null;
-  onNavigate: (view: 'calendar' | 'admin') => void;
-  currentView: 'calendar' | 'admin';
+  onNavigate: (view: AppView) => void;
+  currentView: AppView;
   onLogout: () => void;
 }
 
@@ -18,6 +18,11 @@ export function Header({ user, onNavigate, currentView, onLogout }: HeaderProps)
         <button className={currentView === 'calendar' ? 'btn btn-solid' : 'btn'} onClick={() => onNavigate('calendar')}>
           Public Calendar
         </button>
+        {(user?.role === 'organizer' || user?.role === 'admin') && (
+          <button className={currentView === 'organizer' ? 'btn btn-solid' : 'btn'} onClick={() => onNavigate('organizer')}>
+            Submit Event
+          </button>
+        )}
         {user?.role === 'admin' && (
           <button className={currentView === 'admin' ? 'btn btn-solid' : 'btn'} onClick={() => onNavigate('admin')}>
             Admin Panel
@@ -27,7 +32,11 @@ export function Header({ user, onNavigate, currentView, onLogout }: HeaderProps)
           <button className="btn" onClick={onLogout}>
             Log out
           </button>
-        ) : null}
+        ) : (
+          <button className={currentView === 'account' ? 'btn btn-solid' : 'btn'} onClick={() => onNavigate('account')}>
+            Account
+          </button>
+        )}
       </nav>
     </header>
   );

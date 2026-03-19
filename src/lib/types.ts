@@ -2,6 +2,7 @@ export type UserRole = 'user' | 'organizer' | 'admin';
 export type EventStatus = 'draft' | 'published';
 export type Visibility = 'public' | 'private';
 export type ModerationStatus = 'pending' | 'approved' | 'rejected';
+export type AppView = 'calendar' | 'admin' | 'account' | 'organizer';
 
 export interface EventType {
   id: number;
