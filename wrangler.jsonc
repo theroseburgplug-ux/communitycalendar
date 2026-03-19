@@ -1,0 +1,27 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "calendar-cloudflare-app",
+	"main": "worker/index.ts",
+	"compatibility_date": "2026-03-18",
+	"assets": {
+		"directory": "./dist",
+		"binding": "ASSETS"
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "calendar_db",
+			"database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+		},
+		{
+			"binding": "calendar_dv",
+			"database_name": "calendar_db",
+			"database_id": "326db7e0-a249-4033-9fa4-06c518b7bacc"
+		}
+	],
+	"vars": {
+		"APP_NAME": "Community Calendar",
+		"COOKIE_NAME": "calendar_session",
+		"SESSION_TTL_DAYS": "14"
+	}
+}
