@@ -94,6 +94,44 @@ export default {
       );
     }
 
+    if (url.pathname === '/api/auth/register' && request.method === 'POST') {
+      const body = await request.json<{ email?: string; name?: string; password?: string }>().catch(() => ({}));
+      const email = (body.email || '').trim().toLowerCase();
+      const name = (body.name || '').trim();
+      const password = body.password || '';
+      if (!email || !name || !password) return json({ error: 'Email, name, and password are required.' }, 400);
+      if (!email.includes('@')) return json({ error: 'A valid email address is required.' }, 400);
+      if (password.length < 8) return json({ error: 'Password must be at least 8 characters.' }, 400);
+
+      const existing = await env.DB.prepare('SELECT id FROM users WHERE email = ? LIMIT 1').bind(email).first<{ id: number }>();
+      if (existing) return json({ error: 'An account with that email already exists.' }, 409);
+
+      const salt = crypto.randomUUID().replaceAll('-', '');
+      const hash = await sha256(`${salt}${password}`);
+      const now = new Date().toISOString();
+
+      const insert = await env.DB.prepare(
+        'INSERT INTO users (email, name, role, password_hash, password_salt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      )
+        .bind(email, name, 'organizer', hash, salt, now, now)
+        .run();
+
+      const userId = Number(insert.meta.last_row_id);
+      const token = crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', '');
+      const ttlDays = Number(env.SESSION_TTL_DAYS || '14');
+      const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000).toISOString();
+
+      await env.DB.prepare('INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)')
+        .bind(token, userId, expiresAt, now)
+        .run();
+
+      return json(
+        { user: { id: userId, email, name, role: 'organizer' } },
+        201,
+        { 'Set-Cookie': createCookie(env.COOKIE_NAME, token, ttlDays) },
+      );
+    }
+
     if (url.pathname === '/api/auth/logout' && request.method === 'POST') {
       const token = getCookie(request, env.COOKIE_NAME);
       if (token) {
@@ -136,6 +174,90 @@ export default {
         </html>`,
         { headers: { 'content-type': 'text/html; charset=utf-8' } },
       );
+    }
+
+    if (url.pathname === '/api/organizer/events' && request.method === 'POST') {
+      const user = await requireOrganizerOrAdmin(request, env);
+      if (user instanceof Response) return user;
+      const payload = await parseEventPayload(request);
+      if (payload instanceof Response) return payload;
+
+      const slug = payload.slug || slugify(payload.title);
+      const now = new Date().toISOString();
+      const insert = await env.DB.prepare(
+        `INSERT INTO events (
+          title, slug, description, start_at, end_at, all_day, location, organizer,
+          status, visibility, event_type_id, created_by_id, created_at, updated_at,
+          moderation_status, approved_at, approved_by_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+        .bind(
+          payload.title,
+          slug,
+          payload.description,
+          payload.startAt,
+          payload.endAt || null,
+          payload.allDay ? 1 : 0,
+          payload.location || null,
+          payload.organizer || null,
+          'draft',
+          'public',
+          payload.eventTypeId,
+          user.id,
+          now,
+          now,
+          'pending',
+          null,
+          null,
+        )
+        .run();
+
+      const id = Number(insert.meta.last_row_id);
+      const item = await selectEventById(env, id);
+      return json({ item }, 201);
+    }
+
+    if (url.pathname === '/api/admin/events' && request.method === 'GET') {
+      const user = await requireAdmin(request, env);
+      if (user instanceof Response) return user;
+      const items = await selectAllAdminEvents(env);
+      return json({ items });
+    }
+
+    if (url.pathname === '/api/admin/moderation/pending' && request.method === 'GET') {
+      const user = await requireAdmin(request, env);
+      if (user instanceof Response) return user;
+      const items = await selectPendingEvents(env);
+      return json({ items });
+    }
+
+    const moderationIdMatch = url.pathname.match(/^\/api\/admin\/moderation\/(\d+)\/(approve|reject)$/);
+    if (moderationIdMatch && request.method === 'POST') {
+      const user = await requireAdmin(request, env);
+      if (user instanceof Response) return user;
+      const id = Number(moderationIdMatch[1]);
+      const action = moderationIdMatch[2] as 'approve' | 'reject';
+      const now = new Date().toISOString();
+
+      const existing = await env.DB.prepare('SELECT id FROM events WHERE id = ?').bind(id).first<{ id: number }>();
+      if (!existing) return json({ error: 'Event not found.' }, 404);
+
+      if (action === 'approve') {
+        await env.DB.prepare(
+          `UPDATE events SET moderation_status = 'approved', approved_at = ?, approved_by_id = ?, status = 'published', updated_at = ? WHERE id = ?`,
+        )
+          .bind(now, user.id, now, id)
+          .run();
+      } else {
+        await env.DB.prepare(
+          `UPDATE events SET moderation_status = 'rejected', approved_at = ?, approved_by_id = ?, status = 'draft', updated_at = ? WHERE id = ?`,
+        )
+          .bind(now, user.id, now, id)
+          .run();
+      }
+
+      const item = await selectEventById(env, id);
+      return json({ item });
     }
 
     if (url.pathname === '/api/admin/events' && request.method === 'POST') {
@@ -289,6 +411,13 @@ async function requireAdmin(request: Request, env: Env): Promise<SessionUser | R
   return user;
 }
 
+async function requireOrganizerOrAdmin(request: Request, env: Env): Promise<SessionUser | Response> {
+  const user = await getSessionUser(request, env);
+  if (!user) return json({ error: 'Authentication required.' }, 401);
+  if (user.role !== 'organizer' && user.role !== 'admin') return json({ error: 'Organizer or admin access required.' }, 403);
+  return user;
+}
+
 async function sha256(value: string) {
   const bytes = new TextEncoder().encode(value);
   const digest = await crypto.subtle.digest('SHA-256', bytes);
@@ -414,4 +543,42 @@ async function selectEventById(env: Env, id: number): Promise<EventRecord | null
     .bind(id)
     .first<EventRecord>();
   return result ?? null;
+}
+
+const EVENT_SELECT_BASE = `
+  SELECT
+    e.id,
+    e.title,
+    e.slug,
+    e.description,
+    e.start_at as startAt,
+    e.end_at as endAt,
+    e.all_day as allDay,
+    e.location,
+    e.organizer,
+    e.status,
+    e.visibility,
+    e.moderation_status as moderationStatus,
+    e.approved_at as approvedAt,
+    e.approved_by_id as approvedById,
+    e.event_type_id as eventTypeId,
+    et.name as eventTypeName,
+    et.slug as eventTypeSlug,
+    et.color as eventTypeColor,
+    e.created_at as createdAt,
+    e.updated_at as updatedAt
+  FROM events e
+  JOIN event_types et ON et.id = e.event_type_id
+`;
+
+async function selectAllAdminEvents(env: Env): Promise<EventRecord[]> {
+  const result = await env.DB.prepare(`${EVENT_SELECT_BASE} ORDER BY e.start_at ASC`).all<EventRecord>();
+  return (result.results || []) as EventRecord[];
+}
+
+async function selectPendingEvents(env: Env): Promise<EventRecord[]> {
+  const result = await env.DB.prepare(
+    `${EVENT_SELECT_BASE} WHERE e.moderation_status = 'pending' ORDER BY e.start_at ASC`,
+  ).all<EventRecord>();
+  return (result.results || []) as EventRecord[];
 }

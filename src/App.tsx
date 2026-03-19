@@ -1,17 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Header } from './components/Header';
-import { LoginForm } from './components/LoginForm';
 import { api } from './lib/api';
 import type { EventItem, EventPayload, EventType, SessionUser } from './lib/types';
+import { AccountPage } from './pages/AccountPage';
 import { AdminPage } from './pages/AdminPage';
+import { OrganizerSubmitPage } from './pages/OrganizerSubmitPage';
 import { PublicCalendarPage } from './pages/PublicCalendarPage';
 
 export function App() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [types, setTypes] = useState<EventType[]>([]);
   const [events, setEvents] = useState<EventItem[]>([]);
+  const [adminEvents, setAdminEvents] = useState<EventItem[]>([]);
   const [selectedType, setSelectedType] = useState('');
-  const [currentView, setCurrentView] = useState<'calendar' | 'admin'>('calendar');
+  const [currentView, setCurrentView] = useState<'calendar' | 'account' | 'submit' | 'admin'>('calendar');
   const [editingEvent, setEditingEvent] = useState<EventItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -42,7 +44,7 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const adminEvents = useMemo(() => [...events].sort((a, b) => a.startAt.localeCompare(b.startAt)), [events]);
+  const sortedAdminEvents = useMemo(() => [...adminEvents].sort((a, b) => a.startAt.localeCompare(b.startAt)), [adminEvents]);
 
   async function refreshEvents(typeSlug = selectedType) {
     const params = new URLSearchParams();
@@ -51,10 +53,27 @@ export function App() {
     setEvents(result.items);
   }
 
+  async function refreshAdminEvents() {
+    const result = await api.getAdminEvents();
+    setAdminEvents(result.items);
+  }
+
   async function handleLogin(email: string, password: string) {
     const result = await api.login(email, password);
     setUser(result.user);
-    setCurrentView('admin');
+    if (result.user.role === 'admin') {
+      const adminResult = await api.getAdminEvents();
+      setAdminEvents(adminResult.items);
+      setCurrentView('admin');
+    } else {
+      setCurrentView('submit');
+    }
+  }
+
+  async function handleRegister(email: string, name: string, password: string) {
+    const result = await api.register(email, name, password);
+    setUser(result.user);
+    setCurrentView('submit');
   }
 
   async function handleLogout() {
@@ -68,6 +87,14 @@ export function App() {
     await refreshEvents(value);
   }
 
+  async function handleNavigate(view: 'calendar' | 'account' | 'submit' | 'admin') {
+    if (view === 'admin' && user?.role === 'admin') {
+      const result = await api.getAdminEvents();
+      setAdminEvents(result.items);
+    }
+    setCurrentView(view);
+  }
+
   async function handleSave(payload: EventPayload) {
     if (editingEvent) {
       await api.updateEvent(editingEvent.id, payload);
@@ -75,19 +102,19 @@ export function App() {
     } else {
       await api.createEvent(payload);
     }
-    await refreshEvents(selectedType);
+    await Promise.all([refreshEvents(selectedType), refreshAdminEvents()]);
   }
 
   async function handleDelete(item: EventItem) {
     if (!confirm(`Delete \"${item.title}\"?`)) return;
     await api.deleteEvent(item.id);
-    await refreshEvents(selectedType);
+    await Promise.all([refreshEvents(selectedType), refreshAdminEvents()]);
     if (editingEvent?.id === item.id) setEditingEvent(null);
   }
 
   return (
     <div className="app-shell">
-      <Header user={user} currentView={currentView} onNavigate={setCurrentView} onLogout={() => void handleLogout()} />
+      <Header user={user} currentView={currentView} onNavigate={(v) => void handleNavigate(v)} onLogout={() => void handleLogout()} />
       {loading ? <main className="shell"><div className="card">Loading...</div></main> : null}
       {error ? <main className="shell"><div className="card notice error">{error}</div></main> : null}
       {!loading && !error ? (
@@ -96,22 +123,35 @@ export function App() {
             <AdminPage
               user={user}
               types={types}
-              events={adminEvents}
+              events={sortedAdminEvents}
               editingEvent={editingEvent}
               onSave={handleSave}
               onEdit={setEditingEvent}
               onDelete={handleDelete}
               onCancelEdit={() => setEditingEvent(null)}
+              onRefreshAdminEvents={refreshAdminEvents}
             />
           ) : (
-            <main className="shell narrow">
-              <LoginForm onSubmit={handleLogin} />
-            </main>
+            <AccountPage onLogin={handleLogin} onRegister={handleRegister} />
           )
+        ) : currentView === 'submit' ? (
+          user != null ? (
+            <OrganizerSubmitPage types={types} />
+          ) : (
+            <AccountPage onLogin={handleLogin} onRegister={handleRegister} />
+          )
+        ) : currentView === 'account' ? (
+          <AccountPage onLogin={handleLogin} onRegister={handleRegister} />
         ) : (
-          <PublicCalendarPage events={events.filter((event) => event.status === 'published' && event.visibility === 'public')} types={types} selectedType={selectedType} onTypeChange={(value) => void handleTypeChange(value)} />
+          <PublicCalendarPage
+            events={events.filter((event) => event.status === 'published' && event.visibility === 'public')}
+            types={types}
+            selectedType={selectedType}
+            onTypeChange={(value) => void handleTypeChange(value)}
+          />
         )
       ) : null}
     </div>
   );
 }
+
